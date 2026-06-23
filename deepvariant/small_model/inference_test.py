@@ -29,6 +29,7 @@
 from unittest import mock
 from absl.testing import absltest
 from absl.testing import parameterized
+import numpy as np
 import tensorflow as tf
 from deepvariant.protos import deepvariant_pb2
 from deepvariant.small_model import inference
@@ -85,7 +86,9 @@ class SmallModelVariantCallerTest(parameterized.TestCase):
   def setUp(self):
     super().setUp()
     self.mock_classifier = mock.MagicMock()
-    self.mock_classifier.predict.return_value = [
+    # `classify` invokes the model directly (classifier(...)), so stub __call__
+    # rather than .predict().
+    self.mock_classifier.return_value = [
         (0.0, 0.999, 0.0),
         (0.0, 0.0, 0.1),
         (0.0, 0.0, 0.999),
@@ -192,7 +195,7 @@ class SmallModelVariantCallerTest(parameterized.TestCase):
     with mock.patch.object(
         type(self.mock_classifier),
         "__call__",
-        lambda self, x, training: [
+        lambda self, x, training=False: [
             (0.0, 0.999, 0.0),
             (0.0, 0.0, 0.1),
         ],
@@ -254,6 +257,58 @@ class SmallModelVariantCallerTest(parameterized.TestCase):
     )
     self.assertLen(call_variant_outputs, 4)
     self.assertLen(candidates_not_called, 4)
+
+
+class ClassifyEquivalenceTest(parameterized.TestCase):
+  """`classify` calls the model directly; that must match Model.predict()."""
+
+  def _build_small_model(self, num_features: int = 70):
+    """Builds a minimal Dense + softmax MLP of the small model's general shape.
+
+    The predict()-vs-__call__ equivalence holds for any layer sizes (it is a
+    property of the forward pass, not the architecture), so a small network is
+    used for speed rather than the production layer widths. Weights are then
+    amplified so the softmax is peaked, making the arg-max decision meaningful
+    instead of noise from near-uniform untrained outputs.
+    """
+    keras = inference.keras
+    model = keras.Sequential([
+        keras.layers.Input(shape=(num_features,)),
+        keras.layers.Dense(32, activation="relu"),
+        keras.layers.Dense(16, activation="relu"),
+        keras.layers.Dense(
+            len(make_small_model_examples.GenotypeEncoding),
+            activation="softmax",
+        ),
+    ])
+    for layer in model.layers:
+      weights = layer.get_weights()
+      if weights:
+        layer.set_weights([w * 5.0 for w in weights])
+    return model
+
+  @parameterized.parameters(1, 2, 7, 64, 128, 300)
+  def test_classify_matches_predict(self, num_candidates: int):
+    num_features = 70
+    model = self._build_small_model(num_features)
+    rng = np.random.default_rng(num_candidates)
+    # Integer features, exactly as encode_inference_examples produces them.
+    examples = rng.integers(
+        0, 100, size=(num_candidates, num_features)
+    ).astype(np.int64)
+
+    expected = model.predict(examples, batch_size=128, verbose=0)
+    actual = inference.classify(model, examples, batch_size=128)
+
+    self.assertEqual(actual.shape, expected.shape)
+    self.assertEqual(actual.dtype, expected.dtype)
+    # classify() runs the identical forward graph as predict() (same weights, no
+    # train/inference-divergent layers), so the shape, dtype, and every genotype
+    # arg-max decision are preserved; the probabilities also match to sub-ULP.
+    np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-6)
+    np.testing.assert_array_equal(
+        np.argmax(actual, axis=1), np.argmax(expected, axis=1)
+    )
 
 
 if __name__ == "__main__":

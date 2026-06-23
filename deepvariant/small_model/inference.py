@@ -69,7 +69,17 @@ def passes_confidence_threshold(
 def classify(
     classifier: keras.Model, examples: np.ndarray, batch_size: int
 ) -> np.ndarray:
-  return classifier.predict(examples, batch_size=batch_size, verbose=0)
+  # batch_size (the deprecated --small_model_inference_batch_size) is ignored:
+  # each region's candidates are run in a single forward pass.
+  del batch_size
+  # Call the model directly rather than via Model.predict(). predict() rebuilds
+  # a data adapter, callback list, and prediction loop on every invocation;
+  # because the small model is called once per region on a small batch, that
+  # per-call scaffolding -- not the arithmetic -- dominates its runtime.
+  # __call__ runs the same (cached) forward pass without that overhead. The
+  # result is numerically identical here: the model is a plain Dense MLP with no
+  # train/inference-divergent layers (e.g. BatchNorm or Dropout).
+  return np.asarray(classifier(examples, training=False))
 
 
 class SmallModelVariantCaller:

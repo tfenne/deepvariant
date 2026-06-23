@@ -790,7 +790,9 @@ _SMALL_MODEL_EMIT_ALL_CANDIDATES = flags.DEFINE_bool(
 _SMALL_MODEL_INFERENCE_BATCH_SIZE = flags.DEFINE_integer(
     'small_model_inference_batch_size',
     128,
-    'Sets the batch size used by the small model during inference.',
+    'Deprecated and ignored: the small model now runs each region in a single'
+    ' forward pass, so this batch size no longer affects inference. Retained'
+    ' for command-line compatibility.',
 )
 _SMALL_MODEL_VAF_CONTEXT_WINDOW_SIZE = flags.DEFINE_integer(
     'small_model_vaf_context_window_size',
